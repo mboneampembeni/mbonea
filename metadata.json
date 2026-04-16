@@ -1,0 +1,6 @@
+{
+  "name": "H&M Processing Plant",
+  "description": "A technical dashboard for tracking processing plant leases, contact persons, and expiration notifications.",
+  "requestFramePermissions": [],
+  "majorCapabilities": []
+}
