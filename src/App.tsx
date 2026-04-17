@@ -27,10 +27,15 @@ import {
   PhoneCall,
   User,
   Download,
-  Pencil
+  Pencil,
+  Share2,
+  ClipboardPaste,
+  Check,
+  ExternalLink,
+  Link2
 } from 'lucide-react';
 import { Plant, LeaseRecord, Theme } from './types.ts';
-import { cn, getLeaseStatus, calculateRemainingDays } from './lib/utils.ts';
+import { cn, getLeaseStatus, calculateRemainingDays, formatPhone } from './lib/utils.ts';
 import { format, addDays, parseISO } from 'date-fns';
 
 const INITIAL_PLANTS: Plant[] = [
@@ -88,6 +93,16 @@ export default function App() {
     return !localStorage.getItem('hm_dashboard_visited');
   });
   const [isConfirmingDelete, setIsConfirmingDelete] = useState(false);
+  const [isImporting, setIsImporting] = useState(false);
+  const [importCode, setImportCode] = useState('');
+  const [importError, setImportError] = useState<string | null>(null);
+  const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [isSharing, setIsSharing] = useState(false);
+  const [currentShareUrl, setCurrentShareUrl] = useState('');
+  const [urgentThreshold, setUrgentThreshold] = useState<number>(() => {
+    const saved = localStorage.getItem('hm_urgent_threshold');
+    return saved ? parseInt(saved) : 2;
+  });
 
   const enterDashboard = () => {
     setIsLanding(false);
@@ -98,6 +113,10 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem('hm_plants', JSON.stringify(plants));
   }, [plants]);
+
+  useEffect(() => {
+    localStorage.setItem('hm_urgent_threshold', urgentThreshold.toString());
+  }, [urgentThreshold]);
 
   useEffect(() => {
     localStorage.setItem('hm_theme', theme);
@@ -116,9 +135,9 @@ export default function App() {
     return plants.filter(p => {
       const currentLease = p.history[0];
       if (!currentLease) return false;
-      return getLeaseStatus(currentLease.endDate) !== 'active';
+      return getLeaseStatus(currentLease.endDate, urgentThreshold) !== 'active';
     });
-  }, [plants]);
+  }, [plants, urgentThreshold]);
 
   const toggleTheme = () => setTheme(prev => prev === 'light' ? 'dark' : 'light');
 
@@ -194,7 +213,7 @@ export default function App() {
 
   const isLeaseActive = (plantHistory: LeaseRecord[]) => {
     if (plantHistory.length === 0) return false;
-    const status = getLeaseStatus(plantHistory[0].endDate);
+    const status = getLeaseStatus(plantHistory[0].endDate, urgentThreshold);
     return status === 'active' || status === 'expiring' || status === 'urgent';
   };
 
@@ -235,6 +254,110 @@ export default function App() {
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+  };
+
+  const getShareCode = (plant: Plant) => {
+    const dataToShare = {
+      id: plant.id,
+      name: plant.name,
+      contactName: plant.contactName,
+      contactPhone: plant.contactPhone,
+      history: plant.history,
+      code: plant.code
+    };
+    try {
+      const code = btoa(JSON.stringify(dataToShare));
+      const url = `${window.location.origin}${window.location.pathname}#import=${code}`;
+      setCurrentShareUrl(url);
+      return { code, url };
+    } catch (e) {
+      console.error("Failed to generate share link", e);
+      return { code: '', url: '' };
+    }
+  };
+
+  const shareToSocial = async (plant: Plant) => {
+    const { url } = getShareCode(plant);
+    const shareData = {
+      title: `H&M Leaching Ops: ${plant.name}`,
+      text: `Import details for ${plant.name} recovery unit.`,
+      url: url
+    };
+
+    if (navigator.share) {
+      try {
+        await navigator.share(shareData);
+      } catch (err) {
+        console.log('Error sharing:', err);
+      }
+    } else {
+      const whatsappUrl = `https://wa.me/?text=${encodeURIComponent(shareData.text + ' ' + url)}`;
+      window.open(whatsappUrl, '_blank');
+    }
+  };
+
+  useEffect(() => {
+    const hash = window.location.hash;
+    if (hash.startsWith('#import=')) {
+      const code = hash.replace('#import=', '');
+      try {
+        const decoded = JSON.parse(atob(code));
+        if (decoded.name && Array.isArray(decoded.history)) {
+          setImportCode(code);
+          setIsImporting(true);
+          // Clear hash
+          window.history.replaceState(null, '', window.location.pathname);
+        }
+      } catch (e) {
+        console.error("Auto-import failed", e);
+      }
+    }
+  }, []);
+
+  const handleImport = () => {
+    try {
+      const decoded = JSON.parse(atob(importCode.trim()));
+      
+      // Basic validation
+      if (!decoded.name || !Array.isArray(decoded.history)) {
+        throw new Error('Invalid format');
+      }
+
+      const existingPlantIndex = plants.findIndex(p => p.id === decoded.id);
+
+      if (existingPlantIndex > -1) {
+        // Update existing unit
+        setPlants(prev => prev.map(p => 
+          p.id === decoded.id 
+            ? {
+                ...p,
+                name: decoded.name,
+                contactName: decoded.contactName,
+                contactPhone: decoded.contactPhone,
+                history: decoded.history,
+                code: decoded.code || p.code
+              }
+            : p
+        ));
+      } else {
+        // Create new unit
+        const newPlant: Plant = {
+          id: decoded.id || crypto.randomUUID(),
+          code: decoded.code || 'X',
+          name: `${decoded.name} (Shared)`,
+          contactName: decoded.contactName || 'Shared Contact',
+          contactPhone: decoded.contactPhone || '',
+          history: decoded.history
+        };
+        setPlants(prev => [...prev, newPlant]);
+      }
+
+      setIsImporting(false);
+      setImportCode('');
+      setImportError(null);
+    } catch (e) {
+      setImportError('Invalid share code. Please check and try again.');
+    }
   };
 
   return (
@@ -322,7 +445,7 @@ export default function App() {
             <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-brand text-black shadow-lg shadow-brand/20">
               <Factory size={24} />
             </div>
-            <h1 className="text-xl font-bold tracking-tight">H&M Gold Ops</h1>
+            <h1 className="text-xl font-bold tracking-tight">H&M Leaching Ops</h1>
           </div>
           
           <div className="flex items-center gap-2">
@@ -364,7 +487,7 @@ export default function App() {
           <div className="grid gap-4">
             {plants.map(plant => {
               const currentLease = plant.history[0];
-              const status = currentLease ? getLeaseStatus(currentLease.endDate) : 'idle';
+              const status = currentLease ? getLeaseStatus(currentLease.endDate, urgentThreshold) : 'idle';
               const remaining = currentLease ? calculateRemainingDays(currentLease.endDate) : null;
               
               return (
@@ -372,7 +495,14 @@ export default function App() {
                   key={plant.id}
                   layoutId={plant.id}
                   onClick={() => setSelectedPlantId(plant.id)}
-                  className="group relative cursor-pointer overflow-hidden rounded-2xl border border-border bg-card p-5 transition-all hover:border-brand/50 hover:shadow-lg hover:shadow-brand/5"
+                  className={cn(
+                    "group relative cursor-pointer overflow-hidden rounded-2xl border bg-card p-5 transition-all duration-500",
+                    "hover:shadow-lg hover:shadow-brand/5",
+                    status === 'active' && "border-border hover:border-brand/50",
+                    status === 'expiring' && "border-warning/30 shadow-[0_0_15px_-5px_rgba(234,179,8,0.1)]",
+                    status === 'urgent' && "border-danger/40 shadow-[0_0_20px_-5px_rgba(239,68,68,0.2)] animate-pulse-subtle",
+                    status === 'expired' && "border-danger/20 opacity-80"
+                  )}
                   whileHover={{ y: -2 }}
                   whileTap={{ scale: 0.98 }}
                 >
@@ -385,11 +515,28 @@ export default function App() {
                         <h3 className="font-semibold">{plant.name}</h3>
                         <Pencil size={12} className="text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity" />
                       </div>
+
+                      <div className="flex gap-2">
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            const { url } = getShareCode(plant);
+                            setCurrentShareUrl(url);
+                            setIsSharing(true);
+                          }}
+                          className="flex items-center gap-1.5 rounded-lg bg-brand/10 px-2 py-1 text-[9px] font-bold text-brand transition-all hover:bg-brand/20 border border-brand/20"
+                        >
+                          <Link2 size={10} />
+                          <span>SHARE LINK</span>
+                        </button>
+                      </div>
                       
                       <div className="flex items-center gap-4 py-2">
                         <div className="flex flex-col">
                           <span className="text-[10px] uppercase text-muted-foreground">Contact</span>
-                          <span className="text-sm font-medium">{plant.contactPhone || 'No Phone'}</span>
+                          <span className="text-sm font-medium">
+                            {plant.contactPhone ? formatPhone(plant.contactPhone) : 'No Phone'}
+                          </span>
                         </div>
                         <div className="h-8 w-px bg-border" />
                         <div className="flex flex-col">
@@ -402,17 +549,34 @@ export default function App() {
                     </div>
 
                     <div className="flex flex-col items-end gap-2">
-                      <div className={cn(
-                        "rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider",
-                        status === 'active' && "bg-success/10 text-success",
-                        status === 'expiring' && "bg-warning/10 text-warning",
-                        status === 'urgent' && "bg-danger/20 text-danger animate-pulse",
-                        status === 'expired' && "bg-danger/10 text-danger",
-                        status === 'idle' && "bg-muted text-muted-foreground"
-                      )}>
-                        {status === 'urgent' ? 'Critical' : status}
-                      </div>
-                      {remaining !== null && (
+                       <AnimatePresence mode="wait">
+                         <motion.div 
+                           key={status}
+                           initial={{ opacity: 0, scale: 0.9, y: 5 }}
+                           animate={{ opacity: 1, scale: 1, y: 0 }}
+                           exit={{ opacity: 0, scale: 0.9, y: -5 }}
+                           className={cn(
+                             "relative rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider transition-colors duration-500",
+                             status === 'active' && "bg-success/10 text-success",
+                             status === 'expiring' && "bg-warning/10 text-warning",
+                             status === 'urgent' && "bg-danger/20 text-danger",
+                             status === 'expired' && "bg-danger/10 text-danger",
+                             status === 'idle' && "bg-muted text-muted-foreground"
+                           )}
+                         >
+                           {status === 'urgent' && (
+                             <motion.span 
+                               className="absolute inset-0 rounded-full bg-danger/20"
+                               animate={{ scale: [1, 1.2, 1], opacity: [0.5, 0, 0.5] }}
+                               transition={{ duration: 2, repeat: Infinity }}
+                             />
+                           )}
+                           <span className="relative z-10">
+                             {status === 'urgent' ? 'Critical' : status === 'expiring' ? 'Action' : status}
+                           </span>
+                         </motion.div>
+                       </AnimatePresence>
+                       {remaining !== null && (
                         <div className="flex items-center gap-1 text-xs font-mono text-muted-foreground">
                           <Clock size={12} />
                           {remaining}d left
@@ -442,20 +606,22 @@ export default function App() {
             })}
             
             {/* Add New Plant Button */}
-            <motion.button
-              onClick={addNewPlant}
-              className="group flex flex-col items-center justify-center gap-3 rounded-2xl border-2 border-dashed border-border p-8 transition-all hover:border-brand/40 hover:bg-brand/5"
-              whileHover={{ scale: 1.01 }}
-              whileTap={{ scale: 0.99 }}
-            >
-              <div className="flex h-12 w-12 items-center justify-center rounded-full bg-muted text-muted-foreground group-hover:bg-brand/20 group-hover:text-brand">
-                <Plus size={24} />
-              </div>
-              <div className="text-center">
-                <p className="font-bold">Register Gold Recovery Unit</p>
-                <p className="text-xs text-muted-foreground">Add new Vat, CIP, or CIL plant</p>
-              </div>
-            </motion.button>
+            <div className="grid gap-4">
+              <motion.button
+                onClick={addNewPlant}
+                className="group flex flex-col items-center justify-center gap-3 rounded-2xl border-2 border-dashed border-border p-8 transition-all hover:border-brand/40 hover:bg-brand/5"
+                whileHover={{ scale: 1.01 }}
+                whileTap={{ scale: 0.99 }}
+              >
+                <div className="flex h-12 w-12 items-center justify-center rounded-full bg-muted text-muted-foreground group-hover:bg-brand/20 group-hover:text-brand">
+                  <Plus size={24} />
+                </div>
+                <div className="text-center">
+                  <p className="font-bold">Register Gold Recovery Unit</p>
+                  <p className="text-xs text-muted-foreground">Add new Vat, CIP, or CIL plant</p>
+                </div>
+              </motion.button>
+            </div>
           </div>
         </section>
       </main>
@@ -482,7 +648,7 @@ export default function App() {
                   <h4 className="font-bold">{selectedPlant.name}</h4>
                   <Pencil size={12} className="text-brand" />
                 </div>
-                <p className="text-xs text-muted-foreground">{selectedPlant.contactName}</p>
+                <p className="text-xs text-muted-foreground">{formatPhone(selectedPlant.contactPhone)}</p>
               </div>
 
               <div className="flex gap-2">
@@ -502,6 +668,126 @@ export default function App() {
         )}
       </AnimatePresence>
 
+      {/* Import Modal */}
+      {isImporting && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
+          <motion.div 
+            initial={{ scale: 0.95, opacity: 0 }}
+            animate={{ scale: 1, opacity: 1 }}
+            className="w-full max-w-md overflow-hidden rounded-3xl bg-card border border-border shadow-2xl"
+          >
+            <div className="p-8">
+              <div className="mb-6 flex items-center justify-between">
+                <h3 className="text-2xl font-bold tracking-tight">Import Shared Unit</h3>
+                <button onClick={() => {
+                  setIsImporting(false);
+                  setImportCode('');
+                  setImportError(null);
+                }} className="rounded-full bg-muted p-2">
+                  <X size={24} />
+                </button>
+              </div>
+
+              <div className="space-y-4">
+                <p className="text-sm text-muted-foreground">
+                  Paste the unique share code provided by another plant operator to import the unit and its history.
+                </p>
+                
+                <textarea 
+                  value={importCode}
+                  onChange={(e) => setImportCode(e.target.value)}
+                  placeholder="Paste unit share code here..."
+                  className="w-full h-32 rounded-xl border border-border bg-muted/30 p-4 text-xs font-mono focus:border-brand focus:outline-none resize-none"
+                />
+
+                {importError && (
+                  <p className="text-xs text-danger font-bold flex items-center gap-2">
+                    <AlertTriangle size={14} />
+                    {importError}
+                  </p>
+                )}
+
+                <button 
+                  onClick={handleImport}
+                  disabled={!importCode.trim()}
+                  className="w-full flex items-center justify-center gap-2 rounded-xl bg-brand py-4 text-sm font-bold text-black shadow-lg shadow-brand/20 disabled:opacity-50 disabled:grayscale transition-all hover:scale-[1.01]"
+                >
+                  <ClipboardPaste size={20} />
+                  <span>Finalize Import</span>
+                </button>
+              </div>
+            </div>
+          </motion.div>
+        </div>
+      )}
+
+      {/* Share Modal */}
+      {isSharing && selectedPlant && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 p-4 backdrop-blur-sm">
+          <motion.div 
+            initial={{ scale: 0.95, opacity: 0 }}
+            animate={{ scale: 1, opacity: 1 }}
+            className="w-full max-w-sm overflow-hidden rounded-[2.5rem] bg-card border border-border p-8 shadow-2xl"
+          >
+            <div className="mb-6 flex items-center justify-between">
+              <div>
+                <h3 className="text-xl font-bold tracking-tight">Share Unit Link</h3>
+                <p className="text-xs text-muted-foreground">{selectedPlant.name}</p>
+              </div>
+              <button 
+                onClick={() => setIsSharing(false)}
+                className="rounded-full bg-muted p-2"
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            <div className="space-y-6">
+              <div className="rounded-2xl bg-muted/50 p-4 border border-border text-center">
+                <p className="text-[10px] uppercase font-bold text-muted-foreground mb-3">One-Click Import Link</p>
+                <div className="flex flex-col items-center gap-2">
+                  <div className="flex h-12 w-12 items-center justify-center rounded-full bg-brand/10 text-brand mb-1">
+                    <Link2 size={24} />
+                  </div>
+                  <p className="text-[10px] text-muted-foreground break-all px-4 line-clamp-2">
+                    {currentShareUrl}
+                  </p>
+                </div>
+              </div>
+
+              <div className="grid gap-3">
+                <button 
+                  onClick={() => shareToSocial(selectedPlant)}
+                  className="flex w-full items-center justify-center gap-2 rounded-xl bg-brand py-4 text-sm font-bold text-black shadow-lg shadow-brand/20 transition-all active:scale-95"
+                >
+                  <ExternalLink size={18} />
+                  <span>Send via App</span>
+                </button>
+                
+                <button 
+                  onClick={() => {
+                    navigator.clipboard.writeText(currentShareUrl);
+                    setCopiedId('url-copy');
+                    setTimeout(() => setCopiedId(null), 2000);
+                  }}
+                  className="w-full py-3 rounded-xl border border-border text-sm font-bold hover:bg-muted transition-colors"
+                >
+                  {copiedId === 'url-copy' ? (
+                    <span className="flex items-center justify-center gap-2 text-success">
+                      <Check size={16} /> Link Copied
+                    </span>
+                  ) : 'Copy Link to Clipboard'}
+                </button>
+              </div>
+
+              <p className="text-center text-[10px] text-muted-foreground leading-relaxed">
+                This link allows others to instantly import this unit and its history by just clicking it.
+              </p>
+            </div>
+          </motion.div>
+        </div>
+      )}
+
       {/* Notifications Panel */}
       {showNotifications && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
@@ -510,14 +796,31 @@ export default function App() {
             animate={{ scale: 1, opacity: 1 }}
             className="w-full max-w-md overflow-hidden rounded-3xl bg-card border border-border shadow-2xl"
           >
-            <div className="flex items-center justify-between border-b border-border p-6">
-              <div className="flex items-center gap-2">
-                <Bell className="text-brand" size={20} />
-                <h3 className="text-lg font-bold">Lease Alerts</h3>
+            <div className="flex flex-col border-b border-border p-6">
+               <div className="flex items-center justify-between mb-4">
+                <div className="flex items-center gap-2">
+                  <Bell className="text-brand" size={20} />
+                  <h3 className="text-lg font-bold">Lease Alerts</h3>
+                </div>
+                <button onClick={() => setShowNotifications(false)} className="rounded-full p-2 hover:bg-muted">
+                  <X size={20} />
+                </button>
               </div>
-              <button onClick={() => setShowNotifications(false)} className="rounded-full p-2 hover:bg-muted">
-                <X size={20} />
-              </button>
+              <div className="rounded-xl bg-muted/30 p-3 border border-border">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">Urgent Threshold</span>
+                  <span className="text-xs font-bold text-brand">{urgentThreshold} Days</span>
+                </div>
+                <input 
+                  type="range"
+                  min="1"
+                  max="14"
+                  value={urgentThreshold}
+                  onChange={(e) => setUrgentThreshold(parseInt(e.target.value))}
+                  className="w-full h-1.5 bg-muted rounded-lg appearance-none cursor-pointer accent-brand"
+                />
+                <p className="mt-1 text-[9px] text-muted-foreground italic">Notifications show 'URGENT' if days left are ≤ this value.</p>
+              </div>
             </div>
             
             <div className="max-h-[60vh] overflow-y-auto p-4 space-y-3">
@@ -528,14 +831,15 @@ export default function App() {
               ) : (
                 expiringLeases.map(p => {
                   const remaining = calculateRemainingDays(p.history[0].endDate);
-                  const status = getLeaseStatus(p.history[0].endDate);
+                  const status = getLeaseStatus(p.history[0].endDate, urgentThreshold);
                   
                   return (
                     <div key={p.id} className="flex items-center gap-4 rounded-2xl bg-muted/50 p-4 border border-border">
                       <div className={cn(
                         "flex h-10 w-10 shrink-0 items-center justify-center rounded-full",
-                        status === 'expired' ? "bg-danger/20 text-danger" : 
-                        status === 'urgent' ? "bg-danger/20 text-danger animate-pulse" : "bg-warning/20 text-warning"
+                        status === 'expired' && "bg-danger/20 text-danger",
+                        status === 'urgent' && "bg-danger/20 text-danger animate-pulse-subtle",
+                        status === 'expiring' && "bg-warning/20 text-warning"
                       )}>
                         {status === 'expired' ? <AlertTriangle size={20} /> : <Clock size={20} />}
                       </div>
@@ -728,6 +1032,21 @@ export default function App() {
                             </p>
                           </div>
                         )}
+
+                        <div className="pt-2 border-t border-border mt-2">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const { url } = getShareCode(selectedPlant);
+                              setCurrentShareUrl(url);
+                              setIsSharing(true);
+                            }}
+                            className="flex w-full items-center justify-center gap-2 rounded-xl bg-brand/10 border border-brand/20 py-3 text-sm font-bold text-brand transition-all hover:bg-brand/20"
+                          >
+                            <Link2 size={16} />
+                            <span>Share Unit Link</span>
+                          </button>
+                        </div>
                       </div>
 
                       <div className="flex gap-3 pt-4">
