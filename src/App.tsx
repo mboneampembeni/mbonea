@@ -25,15 +25,20 @@ import {
   Bell,
   X,
   PhoneCall,
-  User
+  User,
+  Download,
+  Pencil
 } from 'lucide-react';
 import { Plant, LeaseRecord, Theme } from './types.ts';
 import { cn, getLeaseStatus, calculateRemainingDays } from './lib/utils.ts';
 import { format, addDays, parseISO } from 'date-fns';
 
-const INITIAL_PLANTS: Plant[] = ['A', 'B', 'C', 'D', 'E'].map(id => ({
-  id,
-  name: `Processing Plant ${id}`,
+const INITIAL_PLANTS: Plant[] = [
+  { letter: 'V', name: 'Vat Leaching Plant 1' }
+].map((item, index) => ({
+  id: `initial-plant-${item.letter.toLowerCase()}-${index}`,
+  code: item.letter,
+  name: item.name,
   contactName: 'Not Assigned',
   contactPhone: '',
   history: []
@@ -42,7 +47,32 @@ const INITIAL_PLANTS: Plant[] = ['A', 'B', 'C', 'D', 'E'].map(id => ({
 export default function App() {
   const [plants, setPlants] = useState<Plant[]>(() => {
     const saved = localStorage.getItem('hm_plants');
-    return saved ? JSON.parse(saved) : INITIAL_PLANTS;
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        const seenIds = new Set<string>();
+        
+        // Migrate and deduplicate
+        return parsed.map((p: any) => {
+          let id = p.id;
+          // If ID is a duplicate or looks like an old simple ID, ensure uniqueness
+          if (!id || seenIds.has(id)) {
+            id = crypto.randomUUID();
+          }
+          seenIds.add(id);
+          
+          return {
+            ...p,
+            id,
+            code: p.code || (typeof p.id === 'string' && p.id.length === 1 ? p.id : 'P')
+          };
+        });
+      } catch (e) {
+        console.error("Failed to parse saved plants", e);
+        return INITIAL_PLANTS;
+      }
+    }
+    return INITIAL_PLANTS;
   });
   
   const [theme, setTheme] = useState<Theme>(() => {
@@ -119,12 +149,18 @@ export default function App() {
   };
 
   const addNewPlant = () => {
-    const nextLetter = String.fromCharCode(65 + plants.length);
-    const id = plants.length < 26 ? nextLetter : `P-${plants.length + 1}`;
+    // Generate a code based on current count + some logic for uniqueness if needed
+    // But since id is UUID, name/code don't need to be strictly unique globally, 
+    // just helpful. 
+    const count = plants.length;
+    const nextLetter = String.fromCharCode(65 + count % 26);
+    const code = count < 26 ? nextLetter : `P-${count + 1}`;
+    const id = crypto.randomUUID();
     
     const newPlant: Plant = {
       id,
-      name: `Processing Plant ${id}`,
+      code,
+      name: `New Recovery Unit ${code}`,
       contactName: 'Not Assigned',
       contactPhone: '',
       history: []
@@ -169,6 +205,38 @@ export default function App() {
     setIsConfirmingDelete(false);
   };
 
+  const exportToCSV = () => {
+    const headers = ['Plant Code', 'Plant Name', 'Contact Name', 'Contact Phone', 'Lease ID', 'Start Date', 'End Date', 'Duration (Days)', 'Recorded At'];
+    const rows = plants.flatMap(plant => 
+      plant.history.map(record => [
+        plant.code,
+        plant.name,
+        plant.contactName,
+        plant.contactPhone,
+        record.id,
+        record.startDate,
+        record.endDate,
+        record.days,
+        record.recordedAt
+      ])
+    );
+
+    const csvContent = [
+      headers.join(','),
+      ...rows.map(row => row.map(cell => `"${cell}"`).join(','))
+    ].join('\n');
+
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.setAttribute('href', url);
+    link.setAttribute('download', `gold_recovery_log_${format(new Date(), 'yyyy-MM-dd')}.csv`);
+    link.style.visibility = 'hidden';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
   return (
     <AnimatePresence mode="wait">
       {isLanding ? (
@@ -207,7 +275,7 @@ export default function App() {
               className="mb-4 text-4xl font-black tracking-tight sm:text-5xl"
             >
               H&M <br />
-              <span className="text-brand">Processing</span> Plant
+              <span className="text-brand">Gold</span> Processing
             </motion.h1>
 
             <motion.p 
@@ -216,8 +284,7 @@ export default function App() {
               transition={{ delay: 0.4 }}
               className="mb-12 text-lg text-muted-foreground leading-relaxed"
             >
-              Next-generation industrial management. <br />
-              Secure lease tracking and plant logistics.
+              Industrial logistics for <span className="text-foreground font-bold italic">Vat Leaching</span>, <span className="text-foreground font-bold italic">CIP</span>, and <span className="text-foreground font-bold italic">CIL</span> operations.
             </motion.p>
 
             <motion.button
@@ -255,10 +322,17 @@ export default function App() {
             <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-brand text-black shadow-lg shadow-brand/20">
               <Factory size={24} />
             </div>
-            <h1 className="text-xl font-bold tracking-tight">H&M Processing</h1>
+            <h1 className="text-xl font-bold tracking-tight">H&M Gold Ops</h1>
           </div>
           
           <div className="flex items-center gap-2">
+            <button 
+              onClick={exportToCSV}
+              title="Export to CSV"
+              className="rounded-full p-2 hover:bg-muted transition-colors text-muted-foreground hover:text-foreground"
+            >
+              <Download size={20} />
+            </button>
             <button 
               onClick={() => setShowNotifications(true)}
               className="relative rounded-full p-2 hover:bg-muted transition-colors"
@@ -306,9 +380,10 @@ export default function App() {
                     <div className="space-y-1">
                       <div className="flex items-center gap-2">
                         <span className="flex h-6 w-6 items-center justify-center rounded bg-muted text-xs font-bold text-muted-foreground">
-                          {plant.id}
+                          {plant.code || plant.id.substring(0, 1)}
                         </span>
                         <h3 className="font-semibold">{plant.name}</h3>
+                        <Pencil size={12} className="text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity" />
                       </div>
                       
                       <div className="flex items-center gap-4 py-2">
@@ -377,8 +452,8 @@ export default function App() {
                 <Plus size={24} />
               </div>
               <div className="text-center">
-                <p className="font-bold">Add Processing Plant</p>
-                <p className="text-xs text-muted-foreground">Register a new unit in the system</p>
+                <p className="font-bold">Register Gold Recovery Unit</p>
+                <p className="text-xs text-muted-foreground">Add new Vat, CIP, or CIL plant</p>
               </div>
             </motion.button>
           </div>
@@ -403,7 +478,10 @@ export default function App() {
               </button>
               
               <div className="flex-1 space-y-0.5">
-                <h4 className="font-bold">{selectedPlant.name}</h4>
+                <div className="flex items-center gap-2">
+                  <h4 className="font-bold">{selectedPlant.name}</h4>
+                  <Pencil size={12} className="text-brand" />
+                </div>
                 <p className="text-xs text-muted-foreground">{selectedPlant.contactName}</p>
               </div>
 
@@ -415,8 +493,8 @@ export default function App() {
                   }}
                   className="flex h-12 px-6 items-center justify-center gap-2 rounded-xl bg-brand text-black font-bold shadow-lg shadow-brand/20"
                 >
-                  <Plus size={20} />
-                  <span>Update Lease</span>
+                  <Factory size={20} />
+                  <span>Manage Unit</span>
                 </button>
               </div>
             </div>
@@ -508,7 +586,7 @@ export default function App() {
           >
             <div className="p-8">
               <div className="mb-6 flex items-center justify-between">
-                <h3 className="text-2xl font-bold tracking-tight">Plant Management</h3>
+                <h3 className="text-2xl font-bold tracking-tight">Unit Management</h3>
                 <button onClick={() => {
                   setIsManagingPlant(false);
                   setIsConfirmingDelete(false);
@@ -569,12 +647,12 @@ export default function App() {
                     }}>
                       <div className="space-y-4">
                         <div className="space-y-1.5">
-                          <label className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">Plant Display Name</label>
+                          <label className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">Recovery Unit Name</label>
                           <div className="relative">
                             <Factory className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" size={16} />
                             <input 
                               name="plantName"
-                              placeholder="e.g. Plant Alpha"
+                              placeholder="e.g. CIP Plant #4"
                               defaultValue={selectedPlant.name}
                               className="w-full rounded-xl border border-border bg-muted/30 py-3 pl-10 pr-4 text-sm font-bold focus:border-brand focus:outline-none"
                               required
@@ -664,7 +742,7 @@ export default function App() {
                           type="submit"
                           className="flex-[2] rounded-2xl bg-brand py-4 text-sm font-bold text-black shadow-lg shadow-brand/20 hover:brightness-110"
                         >
-                          Save Record
+                          Save Changes
                         </button>
                       </div>
 

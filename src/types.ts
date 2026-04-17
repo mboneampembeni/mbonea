@@ -12,7 +12,8 @@ export interface LeaseRecord {
 }
 
 export interface Plant {
-  id: string; // A, B, C, D, E
+  id: string; // Unique UUID
+  code: string; // A, B, C, D, E (For display)
   name: string;
   contactName: string;
   contactPhone: string;

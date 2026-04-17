@@ -1,6 +1,6 @@
 {
-  "name": "H&M Processing Plant",
-  "description": "A technical dashboard for tracking processing plant leases, contact persons, and expiration notifications.",
+  "name": "H&M Gold Processing Log",
+  "description": "Logistics and lease management for Gold Processing Plants: Vat Leaching, CIP (Carbon in Pulp), and CIL (Carbon in Leach).",
   "requestFramePermissions": [],
   "majorCapabilities": []
 }
