@@ -1,0 +1,7 @@
+{
+  "name": "HM Gold Processing Log",
+  "integrations": {
+    "capacitor": {}
+  },
+  "type": "react"
+}
